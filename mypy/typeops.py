@@ -5,7 +5,7 @@ NOTE: These must not be accessed from mypy.nodes or mypy.types to avoid import
       since these may assume that MROs are ready.
 """
 
-from typing import cast, Optional, List, Sequence, Set, Iterable, TypeVar
+from typing import cast, Optional, List, Sequence, Set, Iterable, Union, TypeVar
 from typing_extensions import Type as TypingType
 import sys
 
@@ -311,6 +311,26 @@ def callable_corresponding_argument(typ: CallableType,
     return by_name if by_name is not None else by_pos
 
 
+def _can_use_fast_path(items: Union[List[ProperType], List[Optional[ProperType]]]) -> bool:
+    types = set()  # type: Set[str]
+
+    for item in items:
+        if isinstance(item, LiteralType):
+            item = item.fallback
+        if not isinstance(item, Instance):
+            return False
+        if item.type.is_enum or item.type.fullname == 'builtins.str':
+            types.add(item.type.fullname)
+        else:
+            return False
+
+    # we allow a fast path if and only if
+    #   - all elements are of the same type
+    #   - the singular type of all elements is an Enum or a string
+    # TODO: supports int as well?
+    return len(types) == 1
+
+
 def make_simplified_union(items: Sequence[Type],
                           line: int = -1, column: int = -1,
                           *, keep_erased: bool = False) -> ProperType:
@@ -346,9 +366,7 @@ def make_simplified_union(items: Sequence[Type],
     removed = set()  # type: Set[int]
 
     # Avoid slow nested for loop for Union of Literal of strings (issue #9169)
-    if all((isinstance(item, LiteralType) and
-            item.fallback.type.fullname == 'builtins.str')
-           for item in items):
+    if _can_use_fast_path(items):
         seen = set()    # type: Set[str]
         for index, item in enumerate(items):
             assert isinstance(item, LiteralType)
